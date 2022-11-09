@@ -72,9 +72,10 @@ def _shuffleBatch(output, proj, intervals):
 
 def _selfregLoss(
     #output, feat, proj, intervals, c_scale, SelfReg_criterion=nn.MSELoss()
-    output, feat, proj, intervals, c_scale, SelfReg_criterion=hypnn.HyperbolicDistanceLayer(0.1)
+    output, feat, proj, intervals, c_scale, SelfReg_criterion,c,clip_r
 ):
     output_2, output_3, feat_2, feat_3 = _shuffleBatch(output, proj, intervals)
+    SelfReg_criterion=hypnn.HyperbolicDistanceLayer(c=c, clip_r=clip_r)
 
     lam = np.random.beta(0.5, 0.5)
 
@@ -164,18 +165,19 @@ def train(
     criterion,
     is_selfreg,
     is_idcl,
-    SelfReg_criterion=hypnn.HyperbolicDistanceLayer(0.1),
-    #SelfReg_criterion=nn.MSELoss(),
+    #SelfReg_criterion,
+    SelfReg_criterion=nn.MSELoss(),
 ):
     val_losses = []
     val_accuracies = []
+    print("device",device)
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
     avg_loss_val = 0
     avg_acc_val = 0
 
-    SelfReg_criterion = hypnn.HyperbolicDistanceLayer(0.1)
+    SelfReg_criterion = hypnn.HyperbolicDistanceLayer(c=model.c,clip_r=model.clip_r)
 
     if is_idcl:
         epoch_1 = (epochs // 3) // 2
@@ -185,13 +187,13 @@ def train(
 
     for epoch in range(epochs):
         # LP-FT
-        if epoch < 5:
-            for name, param in model.named_parameters():
-                if not "hypermlr" in str(name):
-                    param.requires_grad = False
-        else:
-            for name, param in model.named_parameters():
-                param.requires_grad = True 
+#        if epoch < 5:
+#            for name, param in model.named_parameters():
+#                if not "hypermlr" in str(name):
+#                    param.requires_grad = False
+#        else:
+#            for name, param in model.named_parameters():
+#                param.requires_grad = True 
 
         epoch_loss = 0
         epoch_accuracy = 0
@@ -230,6 +232,8 @@ def train(
 
             # loss
             cl_loss = criterion(output, y)
+            poinc = model.c
+            poinclipr = model.clip_r
             if is_selfreg:
                 selfreg= _selfregLoss(
                     output,
@@ -238,6 +242,8 @@ def train(
                     intervals,
                     c_scale=min(cl_loss.item(), 1.0),
                     SelfReg_criterion=SelfReg_criterion,
+                    c = poinc,
+                    clip_r = poinclipr
                 )
                 #loss = cl_loss + selfreg
                 loss = cl_loss
@@ -257,16 +263,16 @@ def train(
             epoch_loss += loss.item()
 
             batch += len(x)
-            print(
-                "Epoch: {} [{}/{} ({:.0f}%)],\tAccuracy: {:.1f}%,  \t Loss: {:.4f}".format(
-                    epoch + 1,
-                    batch,
-                    len(train_loader.dataset),
-                    100.0 * (batch / len(train_loader.dataset)),
-                    100.0 * (accuracy.item() / len(x)),
-                    loss.item(),
-                )
-            )
+#            print(
+#                "Epoch: {} [{}/{} ({:.0f}%)],\tAccuracy: {:.1f}%,  \t Loss: {:.4f}".format(
+#                    epoch + 1,
+#                    batch,
+#                    len(train_loader.dataset),
+#                    100.0 * (batch / len(train_loader.dataset)),
+#                    100.0 * (accuracy.item() / len(x)),
+#                    loss.item(),
+#                )
+#            )
 
         # lr_scheduler.step()
         if epoch >= 24:
@@ -297,14 +303,15 @@ def train(
 
         val_losses.append(avg_loss_val)
         val_accuracies.append(avg_acc_val)
+        print("epoch:", epoch)
 
-        print("loss_val:", loss_val, val_set_size)
-        print("acc_val:", acc_val.item(), val_set_size)
+#        print("loss_val:", loss_val, val_set_size)
+#        print("acc_val:", acc_val.item(), val_set_size)
 
         print("Validation", "=" * 50)
-        print("Avg loss (val): {:.4f}".format(avg_loss_val))
+        #print("Avg loss (val): {:.4f}".format(avg_loss_val))
         print("Avg acc (val): {:.4f}".format(avg_acc_val))
-        print()
+        #print()
 
     torch.optim.swa_utils.update_bn(train_loader, swa_model, device=device)
     # print("Best validation acc: {:.4f}".format(best_acc))

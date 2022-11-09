@@ -138,7 +138,7 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False,
+    def __init__(self, block, layers,c,clip_r, num_classes=1000, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None):
         super(ResNet, self).__init__()
@@ -148,7 +148,8 @@ class ResNet(nn.Module):
 
         self.inplanes = 64
         self.dilation = 1
-        self.c = 0.1
+        self.c = c
+        self.clip_r = clip_r
         if replace_stride_with_dilation is None:
             # each element in the tuple indicates if we should replace
             # the 2x2 stride with a dilated convolution instead
@@ -173,7 +174,7 @@ class ResNet(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         #self.fc = nn.Linear(512 * block.expansion, num_classes)
         self.fc = nn.Linear(512 * block.expansion, num_classes)
-        self.poincare = hypnn.ToPoincare(c=self.c, clip_r=2.3)
+        self.poincare = hypnn.ToPoincare(c=self.c, clip_r=self.clip_r)
         #self.hypsoftmax = hypnn.HyperbolicMLR(512*)
         self.hyperfc = hypnn.HypLinear(512*block.expansion, num_classes, self.c)
         self.hypermlr = hypnn.HyperbolicMLR(512*block.expansion, num_classes, self.c)
@@ -244,7 +245,7 @@ class ResNet(nn.Module):
         #x = self.poincare(x)
         x = torch.flatten(x, 1)
         x = self.poincare(x)
-        x = self.hypermlr(x)
+        x = self.hypermlr(x,self.poincare.c)
         #x = self.fc(x)
 
         return x
@@ -267,16 +268,15 @@ class ResNet(nn.Module):
         x = self.poincare(x)
         
         
-        x = self.hypermlr(x)
-        #x = self.fc(x)
+        x = self.hypermlr(x,self.poincare.c)
 
         return x, feature_vec
     
     def projection(self,x):
         return self.proj(x)
 
-def _resnet(arch, block, layers, pretrained, progress, **kwargs):
-    model = ResNet(block, layers, **kwargs)
+def _resnet(arch, block, layers, pretrained, progress,c,clip_r, **kwargs):
+    model = ResNet(block, layers,c,clip_r, **kwargs)
     if pretrained:
         state_dict = load_state_dict_from_url(model_urls[arch],
                                               progress=progress)
@@ -284,14 +284,14 @@ def _resnet(arch, block, layers, pretrained, progress, **kwargs):
     return model
 
 
-def resnet18(pretrained=False, progress=True, **kwargs):
+def resnet18(pretrained=False,c=0.1,clip_r=1, progress=True, **kwargs):
     r"""ResNet-18 model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
         progress (bool): If True, displays a progress bar of the download to stderr
     """
-    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress,
+    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress, c,clip_r,
                    **kwargs)
 
 def resnet50(pretrained: bool = False, progress: bool = True, **kwargs) -> ResNet:
