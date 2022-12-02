@@ -4,6 +4,7 @@ import torch.nn as nn
 from .utils import load_state_dict_from_url
 from torch.autograd import Function
 import hyp_metric.hyptorch.nn as hypnn
+from hyp_metric.hyptorch.pmath import mobius_add
 
 class ReverseLayerF(Function):
     @staticmethod
@@ -138,10 +139,11 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers,c,clip_r, num_classes=1000, zero_init_residual=False,
+    def __init__(self, block, layers,is_hyp,c,clip_r, num_classes=1000, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None):
         super(ResNet, self).__init__()
+        self.is_hyp = is_hyp
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self._norm_layer = norm_layer
@@ -173,11 +175,16 @@ class ResNet(nn.Module):
                                        dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         #self.fc = nn.Linear(512 * block.expansion, num_classes)
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
-        self.poincare = hypnn.ToPoincare(c=self.c, clip_r=self.clip_r)
-        #self.hypsoftmax = hypnn.HyperbolicMLR(512*)
-        self.hyperfc = hypnn.HypLinear(512*block.expansion, num_classes, self.c)
-        self.hypermlr = hypnn.HyperbolicMLR(512*block.expansion, num_classes, self.c)
+        self.last_dim = 512 * block.expansion
+        self.invariant = nn.Linear(512 * block.expansion, self.last_dim)
+        self.specific = nn.Linear(512 * block.expansion, self.last_dim)
+        self.poincareinv = hypnn.ToPoincare(c=self.c, clip_r=self.clip_r)
+        self.poincaresep = hypnn.ToPoincare(c=self.c, clip_r=self.clip_r)
+        self.hypermlr = hypnn.HyperbolicMLR(self.last_dim, num_classes, self.c)
+        self.fcc = nn.Linear(self.last_dim, num_classes)
+        if self.is_hyp:
+            print("This is Hyperbolic")
+            self.fcc = self.hypermlr
 
         self.proj = nn.Sequential(nn.Linear(512,1024),
                                   nn.BatchNorm1d(1024),
@@ -244,11 +251,37 @@ class ResNet(nn.Module):
         x = self.avgpool(x)
         #x = self.poincare(x)
         x = torch.flatten(x, 1)
-        x = self.poincare(x)
-        x = self.hypermlr(x,self.poincare.c)
-        #x = self.fc(x)
+        inv = self.invariant(x)
+        spe = self.specific(x)
+        if self.is_hyp:
+#            inv = self.poincareinv(inv)
+#            spe = self.poincaresep(spe)
+#            inv = self.poincareinv(x)
+#            inv1 = self.poincareinv(x)
+#            spe = self.poincaresep(x)
 
-        return x
+            spe1,_ = self.poincaresep(x)
+            spe2,_ = self.poincaresep(x)
+            spe3,_ = self.poincaresep(x)
+            spe4, xnorm = self.poincaresep(x)
+#            spe5 = self.poincaresep(x)
+#            x = mobius_add(inv,spe, c= self.c)
+            x_norm = torch.norm(x, dim=-1, keepdim=True)
+            fac =  torch.minimum(
+                torch.ones_like(x_norm), 
+                (1 /self.c**0.5) / x_norm
+            )
+            x = x * fac            
+            x = mobius_add(x,spe1, c= self.c)
+            #x = mobius_add(x,spe3, c= self.c)
+            #x = mobius_add(x,spe4, c= self.c)
+#            x = mobius_add(x,spe5, c= self.c)
+            x = spe1
+        else:
+            x = inv + spe * 0.1
+        x = self.fcc(x)
+
+        return x, xnorm
 
     def extract_features(self, x):
         x = self.conv1(x)
@@ -263,20 +296,24 @@ class ResNet(nn.Module):
         
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
-        
         feature_vec=x
-        x = self.poincare(x)
-        
-        
-        x = self.hypermlr(x,self.poincare.c)
+        inv = self.invariant(x)
+        spe = self.specific(x)
+        if self.is_hyp:
+            inv = self.poincareinv(inv)
+            spe = self.poincaresep(spe)
+            x = mobius_add(inv,spe, c= self.c)
+        else:
+            x = inv + 0.1* spe
+        x = self.fcc(x)
 
         return x, feature_vec
     
     def projection(self,x):
         return self.proj(x)
 
-def _resnet(arch, block, layers, pretrained, progress,c,clip_r, **kwargs):
-    model = ResNet(block, layers,c,clip_r, **kwargs)
+def _resnet(arch, block, layers, pretrained, progress,is_hyp,c,clip_r, **kwargs):
+    model = ResNet(block, layers,is_hyp,c,clip_r, **kwargs)
     if pretrained:
         state_dict = load_state_dict_from_url(model_urls[arch],
                                               progress=progress)
@@ -284,14 +321,14 @@ def _resnet(arch, block, layers, pretrained, progress,c,clip_r, **kwargs):
     return model
 
 
-def resnet18(pretrained=False,c=0.1,clip_r=1, progress=True, **kwargs):
+def resnet18(pretrained=False,is_hyp=True,c=0.1,clip_r=1, progress=True, **kwargs):
     r"""ResNet-18 model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
         progress (bool): If True, displays a progress bar of the download to stderr
     """
-    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress, c,clip_r,
+    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], pretrained, progress,is_hyp, c,clip_r,
                    **kwargs)
 
 def resnet50(pretrained: bool = False, progress: bool = True, **kwargs) -> ResNet:
