@@ -1,6 +1,5 @@
 import torch
 import torchvision.transforms as transforms
-
 from torchvision import models
 from torchvision.datasets import ImageFolder, DatasetFolder
 import torchvision.datasets as Datasets
@@ -79,28 +78,31 @@ def _selfregLoss(
 
     lam = np.random.beta(0.5, 0.5)
 
-    #hypermean = hypnn.hypermean(0.1)
+    hypermean = hypnn.hypermean(c=c, clip_r=clip_r)
+    hyperembed = hypnn.ToPoincare(c=c, clip_r=clip_r)
+    feat_2 = hyperembed(feat_2)
+    feat_3 = hyperembed(feat_3)
 
     # mixup
-    output_3 = lam * output_2 + (1 - lam) * output_3
-    feat_3 = lam * feat_2 + (1 - lam) * feat_3
-#    output_3 = hypermean(output_2,output_3,lam,True)
-#    feat_3 = hypermean(feat_2,feat_3,lam,False)
+#    output_3 = lam * output_2 + (1 - lam) * output_3
+#    feat_3 = lam * feat_2 + (1 - lam) * feat_3
+    output_3 = hypermean(output_2,output_3,lam)
+    feat_3 = hypermean(feat_2,feat_3,lam)
 
     # regularization
 
-    L_ind_logit = SelfReg_criterion(output, output_2,True)
-    L_hdl_logit = SelfReg_criterion(output, output_3, True)
+    L_ind_logit = SelfReg_criterion(output, output_2)
+    L_hdl_logit = SelfReg_criterion(output, output_3)
     #logitcrit=nn.MSELoss()
     #L_ind_logit = logitcrit(output, output_2)
     #L_hdl_logit = logitcrit(output, output_3)
     L_ind_feat = 0.3 * SelfReg_criterion(feat, feat_2)
     L_hdl_feat = 0.3 * SelfReg_criterion(feat, feat_3)
 
+#    return c_scale * (
+#        lam * (L_ind_logit + L_ind_feat) + (1 - lam) * (L_hdl_logit + L_hdl_feat))
     return c_scale * (
-        lam * (L_ind_logit + L_ind_feat) + (1 - lam) * (L_hdl_logit + L_hdl_feat))
-    #return c_scale * (
-    #    lam * (L_ind_logit + L_ind_feat) + (1 - lam) * (L_hdl_logit + L_hdl_feat)), lam * (L_ind_logit) + (1 - lam) * (L_hdl_logit)
+        lam * (L_ind_logit + L_ind_feat) + (1 - lam) * (L_hdl_logit + L_hdl_feat)), lam * (L_ind_logit) + (1 - lam) * (L_hdl_logit)
     
 
 
@@ -187,7 +189,7 @@ def train(
 
     for epoch in range(epochs):
         # LP-FT
-#        if epoch < 5:
+#        if epoch < 10:
 #            for name, param in model.named_parameters():
 #                if not "hypermlr" in str(name):
 #                    param.requires_grad = False
@@ -228,7 +230,7 @@ def train(
                 output, feat = model.extract_features(x)
                 proj = model.projection(feat)
             else:
-                output = model(x)
+                output, xnorm = model(x)
 
             # loss
             cl_loss = criterion(output, y)
@@ -249,6 +251,8 @@ def train(
                 loss = cl_loss
             else:
                 loss = cl_loss
+                xnorm = hypmath.tanh(0.01**2*xnorm)
+                loss += 0.01*torch.norm(torch.log(xnorm))
 
             loss = torch.mean(loss)
 
@@ -291,7 +295,7 @@ def train(
 
                 optimizer.zero_grad()
 
-                output = model(x)
+                output, _ = model(x)
                 loss = criterion(output, y)
                 _, preds = torch.max(output.data, 1)
 
@@ -335,7 +339,7 @@ def test(
             x = x.to(device)
             y = y.to(device)
 
-            output = model(x)
+            output, _ = model(x)
             loss = criterion(output, y)
 
             _, preds = torch.max(output.data, 1)

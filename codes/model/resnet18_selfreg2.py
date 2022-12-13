@@ -178,8 +178,7 @@ class ResNet(nn.Module):
         self.last_dim = 512 * block.expansion
         self.invariant = nn.Linear(512 * block.expansion, self.last_dim)
         self.specific = nn.Linear(512 * block.expansion, self.last_dim)
-        self.poincareinv = hypnn.ToPoincare(c=self.c, clip_r=self.clip_r*0.25)
-        self.poincaresep = hypnn.ToPoincare(c=self.c, clip_r=self.clip_r*0.25)
+        self.poincaresep = hypnn.ToPoincare(c=self.c, clip_r=self.clip_r)
         self.hypermlr = hypnn.HyperbolicMLR(self.last_dim, num_classes, self.c)
         self.fcc = nn.Linear(self.last_dim, num_classes)
         if self.is_hyp:
@@ -254,16 +253,29 @@ class ResNet(nn.Module):
         inv = self.invariant(x)
         spe = self.specific(x)
         if self.is_hyp:
+#            inv = self.poincareinv(inv)
+#            spe = self.poincaresep(spe)
+#            inv = self.poincareinv(x)
+#            inv1 = self.poincareinv(x)
+#            spe = self.poincaresep(x)
+
             spe1,_ = self.poincaresep(x)
             spe2,_ = self.poincaresep(x)
             spe3,_ = self.poincaresep(x)
             spe4, xnorm = self.poincaresep(x)
+#            spe5 = self.poincaresep(x)
+#            x = mobius_add(inv,spe, c= self.c)
+            x_norm = torch.norm(x, dim=-1, keepdim=True)
+            fac =  torch.minimum(
+                torch.ones_like(x_norm), 
+                (1 / self.c**0.5) / x_norm
+            )
+            x = x * fac            
             x = mobius_add(x,spe1, c= self.c)
-            x = mobius_add(x,spe2, c= self.c)
-            x = mobius_add(x,spe3, c= self.c)
-            x = mobius_add(x,spe4, c= self.c)
-
-#            x = mobius_add(x,spe5, c= self.c)
+            #x = mobius_add(x,spe3, c= self.c)
+            #x = mobius_add(x,spe4, c= self.c)
+            #x = mobius_add(x,spe2, c= self.c)
+#            x = spe1
         else:
             x = inv + spe * 0.1
         x = self.fcc(x)
